@@ -1,190 +1,99 @@
 import os
-import re
 import time
-import asyncio
+import hashlib
 import requests
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from camoufox.async_api import AsyncCamoufox
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-GAME_URL = os.getenv("GAME_URL")
-GAME_USER = os.getenv("GAME_USER")
-GAME_PASS = os.getenv("GAME_PASS")
 CSV_FILE = "game_memory.csv"
 
 MAX_RUNTIME = 19500
 start_time = time.time()
 
 def send_telegram(msg):
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
         requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
     except Exception as e:
         print("Telegram error:", e)
 
-def send_photo(photo_path, caption):
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-    try:
-        with open(photo_path, "rb") as img:
-            requests.post(url, data={"chat_id": CHAT_ID, "caption": caption}, files={"photo": img}, timeout=15)
-    except Exception as e:
-        print("Photo send error:", e)
+def verify_provably_fair(combined_seed, given_hash):
+    """Check karta hai ki game ka SHA-256 hash asli (Fair) hai ya fake"""
+    calculated_hash = hashlib.sha256(combined_seed.encode('utf-8')).hexdigest()
+    if calculated_hash.lower() == given_hash.lower():
+        return f"✅ *100% FAIR PLAY VERIFIED!*\nWebsite ka hash bilkul asli hai:\n`{calculated_hash[:30]}...`"
+    else:
+        return f"🚨 *WARNING: HASH MISMATCH!*\nYeh game fair formula match nahi kar rahi!\nAsli Hash hona chahiye: `{calculated_hash[:25]}...`"
 
-def load_memory():
+def analyze_rtp_and_volatility(mults):
+    """Pichle rounds dekh kar batata hai ki abhi game kitna RTP de rahi hai"""
+    if len(mults) < 5:
+        return f"📥 Round Saved (`{len(mults)}/5`). कम से कम 5 rounds bhejein!"
+    
+    arr = np.array(mults[-20:])
+    above_2x = np.sum(arr >= 2.0) / len(arr) * 100
+    instant_crashes = np.sum(arr <= 1.20) / len(arr) * 100
+    avg_mult = np.mean(arr)
+
+    # Fair Aviator me 2x+ aane ka mathematical chance ~48.5% hota hai
+    if above_2x >= 45:
+        status = "🟢 *FAIR / HOT SESSION* (Game normal 97% RTP ke aas-paas chal rahi hai)"
+    elif instant_crashes >= 50:
+        status = "🔴 *COLD / HIGH DRAIN SESSION* (Abhi 1.20x se niche bahut crash ho rahe hain, mat khelo!)"
+    else:
+        status = "🟡 *AVERAGE SESSION* (Normal volatility chal rahi hai)"
+
+    return (
+        f"{status}\n\n"
+        f"📊 *Last {len(arr)} Rounds Report:*\n"
+        f"• *2.0x+ Success Rate:* `{above_2x:.1f}%` (Fair Standard: ~48.5%)\n"
+        f"• *Low Crash (<1.20x) Rate:* `{instant_crashes:.1f}%`\n"
+        f"• *Average Multiplier:* `{avg_mult:.2f}x`"
+    )
+
+def run_bot():
+    mults = []
     if os.path.exists(CSV_FILE):
-        return pd.read_csv(CSV_FILE).to_dict('records')
-    return []
+        df = pd.read_csv(CSV_FILE)
+        mults = df['mult'].tolist()
 
-def save_memory(dataset):
-    pd.DataFrame(dataset).to_csv(CSV_FILE, index=False)
+    send_telegram(
+        "🛡️ *Fair Play & RTP Auditor Bot Active!*\n\n"
+        "Aap is bot se 2 kaam kar sakte hain:\n"
+        "1️⃣ *Session Fairness Check:* Bas multipliers bhejein (jaise `1.20 3.40 1.05 2.10` ya ek-ek karke `1.50`), bot batayega ki abhi game Fair 97% RTP de rahi hai ya paise kaat rahi hai (Cold Session).\n\n"
+        "2️⃣ *Hash Check:* `/check seed hash` likh kar check karein ki website asli Provably Fair hai ya fake."
+    )
 
-def train_and_predict(history_df, current_features):
-    if len(history_df) < 20:
-        return None, None
+    last_update_id = 0
+    while (time.time() - start_time) < MAX_RUNTIME:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id + 1}&timeout=10"
+            res = requests.get(url, timeout=15).json()
 
-    feature_cols = ['m1', 'm2', 'm3', 'm4', 'm5', 'avg_last_10', 'players', 'gap_50x']
-    X = history_df[feature_cols]
-    
-    y_high_chance = (history_df['target_mult'] >= 10.0).astype(int)
-    clf = RandomForestClassifier(n_estimators=100, random_state=42)
-    clf.fit(X, y_high_chance)
+            for update in res.get("result", []):
+                last_update_id = update["update_id"]
+                text = update.get("message", {}).get("text", "").strip()
 
-    y_exact_mult = np.clip(history_df['target_mult'], 1.0, 100.0)
-    reg = RandomForestRegressor(n_estimators=100, random_state=42)
-    reg.fit(X, y_exact_mult)
+                if text.startswith("/check"):
+                    parts = text.split()
+                    if len(parts) == 3:
+                        send_telegram(verify_provably_fair(parts[1], parts[2]))
+                    else:
+                        send_telegram("👉 Format: `/check <combined_seed> <hash>`")
+                else:
+                    # Ek sath kai numbers ya single number accept karega
+                    nums = [float(x.replace('x', '')) for x in text.split() if x.replace('.', '').replace('x', '').isdigit()]
+                    if nums:
+                        mults.extend(nums)
+                        pd.DataFrame({'mult': mults}).to_csv(CSV_FILE, index=False)
+                        send_telegram(analyze_rtp_and_volatility(mults))
+                    else:
+                        send_telegram("⚠️ Multipliers likh kar bhejein! Jaise: `1.10 2.50 1.05 1.80 4.20`")
+        except Exception:
+            pass
+        time.sleep(1)
 
-    live_df = pd.DataFrame([current_features], columns=feature_cols)
-    prob_high = clf.predict_proba(live_df)[0][1] * 100 if len(clf.classes_) > 1 else 0.0
-    estimated_x = reg.predict(live_df)[0]
-    
-    return prob_high, estimated_x
-
-async def auto_login(page):
-    send_telegram("🕵️ *Stealth Browser se Website khol raha hoon...*")
-    try:
-        await page.wait_for_timeout(6000)
-        await page.screenshot(path="step1_stealth.png")
-        send_photo("step1_stealth.png", "📸 Step 1: Stealth Mode me website aisi dikh rahi hai")
-
-        # Agar 'Begin' button dikhe toh click karein
-        begin_btn = page.locator("button:has-text('Begin')").first
-        if await begin_btn.is_visible(timeout=5000):
-            await begin_btn.click()
-            await page.wait_for_timeout(5000)
-
-        # Login form kholna
-        login_open_btn = page.locator("text=/log in|login|sign in/i").first
-        if await login_open_btn.is_visible(timeout=5000):
-            await login_open_btn.click()
-            await page.wait_for_timeout(3000)
-
-        # ID aur Password bharna
-        user_box = page.locator("input[type='text'], input[type='tel'], input[type='number']").first
-        await user_box.fill(GAME_USER, timeout=15000)
-        await page.wait_for_timeout(1000)
-
-        pass_box = page.locator("input[type='password']").first
-        await pass_box.fill(GAME_PASS, timeout=10000)
-        await page.wait_for_timeout(1000)
-
-        submit_btn = page.locator("button[type='submit'], button:has-text('Log in'), button:has-text('Login')").last
-        await submit_btn.click()
-
-        await page.wait_for_timeout(8000)
-        await page.screenshot(path="login_done.png")
-        send_photo("login_done.png", "✅ Step 2: Login ke baad ki screen!")
-
-    except Exception as e:
-        await page.screenshot(path="error_screen.png")
-        send_photo("error_screen.png", f"⚠️ Abhi screen par yeh hai: {str(e)[:100]}")
-
-async def run_smart_agent():
-    dataset = load_memory()
-    rounds_since_last_50x = dataset[-1]['gap_50x'] if dataset else 0
-    recent_mults = [d['target_mult'] for d in dataset[-10:]] if len(dataset) >= 10 else []
-
-    # Camoufox Anti-Detect Browser (403 Forbidden bypass karne ke liye)
-    async with AsyncCamoufox(headless=True, humanize=True) as browser:
-        page = await browser.new_page()
-        await page.goto(GAME_URL, timeout=60000)
-
-        if GAME_USER and GAME_PASS:
-            await auto_login(page)
-
-        send_telegram(f"🤖 *Live Watcher Chalu Hai*\nSaved Rounds: `{len(dataset)}`")
-        last_mult = None
-
-        while (time.time() - start_time) < MAX_RUNTIME:
-            try:
-                mult_locator = page.locator('.payouts-block .payout:first-child, .result-history .item:first-child').first
-                players_locator = page.locator('.all-bets-block .bets-count').first
-
-                if not await mult_locator.is_visible(timeout=1000):
-                    for frame in page.frames:
-                        if await frame.locator('.payouts-block .payout:first-child').count() > 0:
-                            mult_locator = frame.locator('.payouts-block .payout:first-child').first
-                            players_locator = frame.locator('.all-bets-block .bets-count').first
-                            break
-
-                mult_str = await mult_locator.inner_text(timeout=2000)
-                clean_mult = re.findall(r"\d+\.\d+", mult_str)
-                if not clean_mult:
-                    await asyncio.sleep(2)
-                    continue
-                current_mult = float(clean_mult[0])
-
-                try:
-                    players_str = await players_locator.inner_text(timeout=1000)
-                    current_players = int(re.sub(r"\D", "", players_str) or 200)
-                except Exception:
-                    current_players = 200
-
-                if current_mult != last_mult:
-                    last_mult = current_mult
-
-                    if len(recent_mults) >= 10:
-                        row = {
-                            'm1': recent_mults[-1], 'm2': recent_mults[-2],
-                            'm3': recent_mults[-3], 'm4': recent_mults[-4],
-                            'm5': recent_mults[-5],
-                            'avg_last_10': np.mean(recent_mults[-10:]),
-                            'players': current_players,
-                            'gap_50x': rounds_since_last_50x,
-                            'target_mult': current_mult
-                        }
-                        dataset.append(row)
-                        save_memory(dataset)
-
-                    recent_mults.append(current_mult)
-                    rounds_since_last_50x = 0 if current_mult >= 50.0 else rounds_since_last_50x + 1
-
-                    if len(dataset) >= 20:
-                        df = pd.DataFrame(dataset)
-                        next_input = [
-                            recent_mults[-1], recent_mults[-2], recent_mults[-3],
-                            recent_mults[-4], recent_mults[-5],
-                            np.mean(recent_mults[-10:]), current_players, rounds_since_last_50x
-                        ]
-                        chance_pct, est_x = train_and_predict(df, next_input)
-
-                        if chance_pct and chance_pct >= 65.0:
-                            send_telegram(
-                                f"🔥 *LIVE AI SIGNAL* 🔥\n"
-                                f"📊 *Pattern Match:* `{chance_pct:.1f}%`\n"
-                                f"🚀 *Estimated Plane Range:* `{est_x:.2f}x`\n"
-                                f"👥 *Players:* `{current_players}` | ⏳ *50x Gap:* `{rounds_since_last_50x}`\n"
-                                f"📉 *Last 3 Rounds:* `{recent_mults[-3:]}`"
-                            )
-            except Exception:
-                pass
-
-            await asyncio.sleep(2)
-
-asyncio.run(run_smart_agent())
+if __name__ == "__main__":
+    run_bot()
