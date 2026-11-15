@@ -34,6 +34,8 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           GAME_URL: ${{ secrets.GAME_URL }}
+          GAME_USER: ${{ secrets.GAME_USER }}
+          GAME_PASS: ${{ secrets.GAME_PASS }}
         run: python smart_agent.py
 
       - name: Save Learned AI Memory Back to Repo
