@@ -66,30 +66,36 @@ def train_and_predict(history_df, current_features):
     return prob_high, estimated_x
 
 async def auto_login(page):
-    send_telegram("🔑 *Indian Mobile Mode me Login try kar raha hoon...*")
+    send_telegram("🔑 *Login step check kar raha hoon...*")
     try:
-        # Pehle check karo page kaisa dikh raha hai
+        # 1. Pehle dekho page kaisa khula hai
         await page.screenshot(path="step1_home.png")
-        send_photo("step1_home.png", "📸 Step 1: Website khulne par aisi dikh rahi hai")
+        send_photo("step1_home.png", "📸 Step 1: Website abhi aisi dikh rahi hai")
 
-        # Agar 'Login' button hai toh uspe click karo
+        # 2. Agar 'Begin' button dikhe toh click karke check karein
+        begin_btn = page.locator("button:has-text('Begin'), text='Begin'").first
+        if await begin_btn.is_visible(timeout=5000):
+            await begin_btn.click()
+            await page.wait_for_timeout(5000)
+            await page.screenshot(path="after_begin.png")
+            send_photo("after_begin.png", "📸 'Begin' par click karne ke baad ki screen")
+
+        # 3. Login form kholna
         login_open_btn = page.locator("text=/log in|login|sign in/i").first
         if await login_open_btn.is_visible(timeout=5000):
             await login_open_btn.click()
             await page.wait_for_timeout(3000)
 
-        # Username / Phone Number box
-        user_box = page.locator("input[type='text'], input[type='tel'], input[type='number'], input[placeholder*='Phone' i], input[placeholder*='Account' i], input[placeholder*='User' i]").first
+        # 4. ID aur Password bharna
+        user_box = page.locator("input[type='text'], input[type='tel'], input[type='number'], input[placeholder*='Phone' i], input[placeholder*='User' i]").first
         await user_box.fill(GAME_USER, timeout=15000)
         await page.wait_for_timeout(1000)
 
-        # Password box
         pass_box = page.locator("input[type='password']").first
         await pass_box.fill(GAME_PASS, timeout=10000)
         await page.wait_for_timeout(1000)
 
-        # Submit button
-        submit_btn = page.locator("button[type='submit'], button:has-text('Log in'), button:has-text('Login'), .login-btn").last
+        submit_btn = page.locator("button[type='submit'], button:has-text('Log in'), button:has-text('Login')").last
         await submit_btn.click()
 
         await page.wait_for_timeout(8000)
@@ -106,19 +112,9 @@ async def run_smart_agent():
     recent_mults = [d['target_mult'] for d in dataset[-10:]] if len(dataset) >= 10 else []
 
     async with async_playwright() as p:
-        # Anti-Bot Flags ke saath browser chalu karna
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-setuid-sandbox"
-            ]
-        )
+        browser = await p.chromium.launch(headless=True)
         
-        # Robot ko Asli Indian Android Phone banana
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
             viewport={"width": 412, "height": 915},
             is_mobile=True,
             has_touch=True,
@@ -126,14 +122,11 @@ async def run_smart_agent():
             timezone_id="Asia/Kolkata"
         )
         
-        # Website se chhupana ki hum Robot (webdriver) hain
-        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        
         page = await context.new_page()
         
-        send_telegram("🌐 *Indian Mobile Browser ban kar Website khol raha hoon...*")
+        send_telegram("🌐 *Website khol raha hoon...*")
         await page.goto(GAME_URL, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(8000)
+        await page.wait_for_timeout(6000)
 
         if GAME_USER and GAME_PASS:
             await auto_login(page)
