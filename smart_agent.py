@@ -1,11 +1,12 @@
 import os
+import re
 import time
 import asyncio
 import requests
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from playwright.async_api import async_playwright
+from camoufox.async_api import AsyncCamoufox
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -45,7 +46,7 @@ def save_memory(dataset):
     pd.DataFrame(dataset).to_csv(CSV_FILE, index=False)
 
 def train_and_predict(history_df, current_features):
-    if len(history_df) < 30:
+    if len(history_df) < 20:
         return None, None
 
     feature_cols = ['m1', 'm2', 'm3', 'm4', 'm5', 'avg_last_10', 'players', 'gap_50x']
@@ -66,28 +67,26 @@ def train_and_predict(history_df, current_features):
     return prob_high, estimated_x
 
 async def auto_login(page):
-    send_telegram("🔑 *Login step check kar raha hoon...*")
+    send_telegram("🕵️ *Stealth Browser se Website khol raha hoon...*")
     try:
-        # 1. Pehle dekho page kaisa khula hai
-        await page.screenshot(path="step1_home.png")
-        send_photo("step1_home.png", "📸 Step 1: Website abhi aisi dikh rahi hai")
+        await page.wait_for_timeout(6000)
+        await page.screenshot(path="step1_stealth.png")
+        send_photo("step1_stealth.png", "📸 Step 1: Stealth Mode me website aisi dikh rahi hai")
 
-        # 2. Agar 'Begin' button dikhe toh click karke check karein
-        begin_btn = page.locator("button:has-text('Begin'), text='Begin'").first
+        # Agar 'Begin' button dikhe toh click karein
+        begin_btn = page.locator("button:has-text('Begin')").first
         if await begin_btn.is_visible(timeout=5000):
             await begin_btn.click()
             await page.wait_for_timeout(5000)
-            await page.screenshot(path="after_begin.png")
-            send_photo("after_begin.png", "📸 'Begin' par click karne ke baad ki screen")
 
-        # 3. Login form kholna
+        # Login form kholna
         login_open_btn = page.locator("text=/log in|login|sign in/i").first
         if await login_open_btn.is_visible(timeout=5000):
             await login_open_btn.click()
             await page.wait_for_timeout(3000)
 
-        # 4. ID aur Password bharna
-        user_box = page.locator("input[type='text'], input[type='tel'], input[type='number'], input[placeholder*='Phone' i], input[placeholder*='User' i]").first
+        # ID aur Password bharna
+        user_box = page.locator("input[type='text'], input[type='tel'], input[type='number']").first
         await user_box.fill(GAME_USER, timeout=15000)
         await page.wait_for_timeout(1000)
 
@@ -99,8 +98,8 @@ async def auto_login(page):
         await submit_btn.click()
 
         await page.wait_for_timeout(8000)
-        await page.screenshot(path="login_status.png")
-        send_photo("login_status.png", "✅ Step 2: Login ke baad ki screen!")
+        await page.screenshot(path="login_done.png")
+        send_photo("login_done.png", "✅ Step 2: Login ke baad ki screen!")
 
     except Exception as e:
         await page.screenshot(path="error_screen.png")
@@ -111,32 +110,20 @@ async def run_smart_agent():
     rounds_since_last_50x = dataset[-1]['gap_50x'] if dataset else 0
     recent_mults = [d['target_mult'] for d in dataset[-10:]] if len(dataset) >= 10 else []
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        
-        context = await browser.new_context(
-            viewport={"width": 412, "height": 915},
-            is_mobile=True,
-            has_touch=True,
-            locale="en-IN",
-            timezone_id="Asia/Kolkata"
-        )
-        
-        page = await context.new_page()
-        
-        send_telegram("🌐 *Website khol raha hoon...*")
-        await page.goto(GAME_URL, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(6000)
+    # Camoufox Anti-Detect Browser (403 Forbidden bypass karne ke liye)
+    async with AsyncCamoufox(headless=True, humanize=True) as browser:
+        page = await browser.new_page()
+        await page.goto(GAME_URL, timeout=60000)
 
         if GAME_USER and GAME_PASS:
             await auto_login(page)
 
-        send_telegram(f"🤖 *24/7 AI Watcher Active*\nPurane Saved Rounds: `{len(dataset)}`")
+        send_telegram(f"🤖 *Live Watcher Chalu Hai*\nSaved Rounds: `{len(dataset)}`")
         last_mult = None
 
         while (time.time() - start_time) < MAX_RUNTIME:
             try:
-                mult_locator = page.locator('.payouts-block .payout:first-child').first
+                mult_locator = page.locator('.payouts-block .payout:first-child, .result-history .item:first-child').first
                 players_locator = page.locator('.all-bets-block .bets-count').first
 
                 if not await mult_locator.is_visible(timeout=1000):
@@ -147,10 +134,17 @@ async def run_smart_agent():
                             break
 
                 mult_str = await mult_locator.inner_text(timeout=2000)
-                current_mult = float(mult_str.replace('x', '').strip())
+                clean_mult = re.findall(r"\d+\.\d+", mult_str)
+                if not clean_mult:
+                    await asyncio.sleep(2)
+                    continue
+                current_mult = float(clean_mult[0])
 
-                players_str = await players_locator.inner_text(timeout=2000)
-                current_players = int(players_str.strip())
+                try:
+                    players_str = await players_locator.inner_text(timeout=1000)
+                    current_players = int(re.sub(r"\D", "", players_str) or 200)
+                except Exception:
+                    current_players = 200
 
                 if current_mult != last_mult:
                     last_mult = current_mult
@@ -171,7 +165,7 @@ async def run_smart_agent():
                     recent_mults.append(current_mult)
                     rounds_since_last_50x = 0 if current_mult >= 50.0 else rounds_since_last_50x + 1
 
-                    if len(dataset) >= 30:
+                    if len(dataset) >= 20:
                         df = pd.DataFrame(dataset)
                         next_input = [
                             recent_mults[-1], recent_mults[-2], recent_mults[-3],
@@ -180,18 +174,17 @@ async def run_smart_agent():
                         ]
                         chance_pct, est_x = train_and_predict(df, next_input)
 
-                        if chance_pct and chance_pct >= 70.0:
+                        if chance_pct and chance_pct >= 65.0:
                             send_telegram(
-                                f"🔥 *AI HIGH MULTIPLIER SIGNAL* 🔥\n"
+                                f"🔥 *LIVE AI SIGNAL* 🔥\n"
                                 f"📊 *Pattern Match:* `{chance_pct:.1f}%`\n"
-                                f"🚀 *Estimated Range:* `{est_x:.2f}x`\n"
-                                f"👥 *Players:* `{current_players}` | ⏳ *50x Gap:* `{rounds_since_last_50x}`"
+                                f"🚀 *Estimated Plane Range:* `{est_x:.2f}x`\n"
+                                f"👥 *Players:* `{current_players}` | ⏳ *50x Gap:* `{rounds_since_last_50x}`\n"
+                                f"📉 *Last 3 Rounds:* `{recent_mults[-3:]}`"
                             )
             except Exception:
                 pass
 
             await asyncio.sleep(2)
-
-        await browser.close()
 
 asyncio.run(run_smart_agent())
