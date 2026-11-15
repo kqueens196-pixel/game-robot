@@ -22,20 +22,14 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Stealth Browser & Dependencies
+      - name: Install OCR & AI Libraries
         run: |
           pip install -r requirements.txt
-          python -m camoufox fetch
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-0 libdbus-glib-1-2 libxt6
 
-      - name: Run Smart AI Agent
+      - name: Run Smart Screenshot AI Agent
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          GAME_URL: ${{ secrets.GAME_URL }}
-          GAME_USER: ${{ secrets.GAME_USER }}
-          GAME_PASS: ${{ secrets.GAME_PASS }}
         run: python smart_agent.py
 
       - name: Save Learned AI Memory Back to Repo
