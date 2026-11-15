@@ -1,0 +1,46 @@
+name: 24-7 AI Game Watcher
+
+on:
+  schedule:
+    # Har 5 ghante 30 minute me apne aap naya session start hoga
+    - cron: '*/30 */5 * * *'
+  workflow_dispatch: # Isse aap mobile se 1-click me manually bhi start kar sakte hain
+
+permissions:
+  contents: write # CSV memory file ko wapas repo me save karne ke liye
+
+jobs:
+  watch-and-learn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350 # ~5.8 hours max per cycle
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies & Playwright Browser
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Run Smart AI Agent
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          GAME_URL: ${{ secrets.GAME_URL }}
+        run: python smart_agent.py
+
+      - name: Save Learned AI Memory Back to Repo
+        if: always()
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "AI Watcher Bot"
+          git add game_memory.csv || true
+          git diff --staged --quiet || git commit -m "Update learned game history"
+          git push || true
