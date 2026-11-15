@@ -7,13 +7,14 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from playwright.async_api import async_playwright
 
-# GitHub Secrets se values aayengi (Code me khula nahi rahega)
+# GitHub ki Tijori (Secrets) se details lena
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 GAME_URL = os.getenv("GAME_URL")
+GAME_USER = os.getenv("GAME_USER")
+GAME_PASS = os.getenv("GAME_PASS")
 CSV_FILE = "game_memory.csv"
 
-# 5 ghante 25 minute (19500 sec) chalne ke baad gracefully band hoga taaki data save ho sake
 MAX_RUNTIME = 19500
 start_time = time.time()
 
@@ -22,9 +23,20 @@ def send_telegram(msg):
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
-        requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=5)
+        requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
     except Exception as e:
         print("Telegram error:", e)
+
+# Robot jo dekh raha hai uski photo Telegram par bhejne ka function
+def send_photo(photo_path, caption):
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+    try:
+        with open(photo_path, "rb") as img:
+            requests.post(url, data={"chat_id": CHAT_ID, "caption": caption}, files={"photo": img}, timeout=15)
+    except Exception as e:
+        print("Photo send error:", e)
 
 def load_memory():
     if os.path.exists(CSV_FILE):
@@ -55,6 +67,40 @@ def train_and_predict(history_df, current_features):
     
     return prob_high, estimated_x
 
+async def auto_login(page):
+    send_telegram("🔑 *Robot Login kar raha hai...*")
+    try:
+        # 1. Agar pehle 'Login' button dabana padta hai form kholne ke liye:
+        login_open_btn = page.locator("button:has-text('Log in'), button:has-text('Login'), a:has-text('Login'), a:has-text('Sign in')").first
+        if await login_open_btn.is_visible(timeout=5000):
+            await login_open_btn.click()
+            await page.wait_for_timeout(3000)
+
+        # 2. Username / Phone Number wale dabbe me ID likhna
+        user_box = page.locator("input[type='text'], input[type='tel'], input[type='email'], input[name*='user'], input[placeholder*='Phone'], input[placeholder*='Username'], input[placeholder*='ID']").first
+        await user_box.fill(GAME_USER)
+        await page.wait_for_timeout(1000)
+
+        # 3. Password wale dabbe me Password likhna
+        pass_box = page.locator("input[type='password']").first
+        await pass_box.fill(GAME_PASS)
+        await page.wait_for_timeout(1000)
+
+        # 4. Submit / Login button dabana
+        submit_btn = page.locator("button[type='submit'], button:has-text('Log in'), button:has-text('Login'), button:has-text('Sign in')").last
+        await submit_btn.click()
+
+        # Login hone ke baad 8 second rukna taaki page load ho jaye
+        await page.wait_for_timeout(8000)
+
+        # 5. Saboot ke liye Screenshot leke Telegram par bhejna!
+        await page.screenshot(path="login_status.png")
+        send_photo("login_status.png", "📸 Yeh dekho! Robot ne login try kiya, abhi screen aisi dikh rahi hai.")
+
+    except Exception as e:
+        await page.screenshot(path="error_screen.png")
+        send_photo("error_screen.png", f"⚠️ Login me dikkat aayi: {str(e)[:100]}")
+
 async def run_smart_agent():
     dataset = load_memory()
     rounds_since_last_50x = dataset[-1]['gap_50x'] if dataset else 0
@@ -62,18 +108,38 @@ async def run_smart_agent():
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(GAME_URL, timeout=60000)
+        context = await browser.new_context(viewport={"width": 1280, "height": 720})
+        page = await context.new_page()
         
+        send_telegram("🌐 *Website khol raha hoon...*")
+        await page.goto(GAME_URL, timeout=60000)
+        await page.wait_for_timeout(5000)
+
+        # Agar ID aur Password diya hai toh login karega
+        if GAME_USER and GAME_PASS:
+            await auto_login(page)
+
         send_telegram(f"🤖 *24/7 AI Watcher Active*\nPurane Saved Rounds: `{len(dataset)}`")
         last_mult = None
 
         while (time.time() - start_time) < MAX_RUNTIME:
             try:
-                mult_str = await page.inner_text('.payouts-block .payout:first-child')
+                # Game ke andar ya iframe ke andar multiplier dhundhna
+                mult_locator = page.locator('.payouts-block .payout:first-child').first
+                players_locator = page.locator('.all-bets-block .bets-count').first
+
+                # Agar game Iframe (chote dabbe) ke andar chal raha ho toh wahan bhi check karega
+                if not await mult_locator.is_visible(timeout=1000):
+                    for frame in page.frames:
+                        if await frame.locator('.payouts-block .payout:first-child').count() > 0:
+                            mult_locator = frame.locator('.payouts-block .payout:first-child').first
+                            players_locator = frame.locator('.all-bets-block .bets-count').first
+                            break
+
+                mult_str = await mult_locator.inner_text(timeout=2000)
                 current_mult = float(mult_str.replace('x', '').strip())
 
-                players_str = await page.inner_text('.all-bets-block .bets-count')
+                players_str = await players_locator.inner_text(timeout=2000)
                 current_players = int(players_str.strip())
 
                 if current_mult != last_mult:
@@ -117,6 +183,6 @@ async def run_smart_agent():
             await asyncio.sleep(2)
 
         await browser.close()
-        send_telegram("🔄 *Shift Complete:* AI apni memory save karke agle 5.5 ghante ke cycle me restart ho raha hai...")
+        send_telegram("🔄 *Shift Complete:* Agle 5.5 ghante ke cycle me restart ho raha hai...")
 
 asyncio.run(run_smart_agent())
