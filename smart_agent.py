@@ -7,7 +7,6 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from playwright.async_api import async_playwright
 
-# GitHub ki Tijori (Secrets) se details lena
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 GAME_URL = os.getenv("GAME_URL")
@@ -27,7 +26,6 @@ def send_telegram(msg):
     except Exception as e:
         print("Telegram error:", e)
 
-# Robot jo dekh raha hai uski photo Telegram par bhejne ka function
 def send_photo(photo_path, caption):
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
@@ -68,38 +66,39 @@ def train_and_predict(history_df, current_features):
     return prob_high, estimated_x
 
 async def auto_login(page):
-    send_telegram("🔑 *Robot Login kar raha hai...*")
+    send_telegram("🔑 *Indian Mobile Mode me Login try kar raha hoon...*")
     try:
-        # 1. Agar pehle 'Login' button dabana padta hai form kholne ke liye:
-        login_open_btn = page.locator("button:has-text('Log in'), button:has-text('Login'), a:has-text('Login'), a:has-text('Sign in')").first
+        # Pehle check karo page kaisa dikh raha hai
+        await page.screenshot(path="step1_home.png")
+        send_photo("step1_home.png", "📸 Step 1: Website khulne par aisi dikh rahi hai")
+
+        # Agar 'Login' button hai toh uspe click karo
+        login_open_btn = page.locator("text=/log in|login|sign in/i").first
         if await login_open_btn.is_visible(timeout=5000):
             await login_open_btn.click()
             await page.wait_for_timeout(3000)
 
-        # 2. Username / Phone Number wale dabbe me ID likhna
-        user_box = page.locator("input[type='text'], input[type='tel'], input[type='email'], input[name*='user'], input[placeholder*='Phone'], input[placeholder*='Username'], input[placeholder*='ID']").first
-        await user_box.fill(GAME_USER)
+        # Username / Phone Number box
+        user_box = page.locator("input[type='text'], input[type='tel'], input[type='number'], input[placeholder*='Phone' i], input[placeholder*='Account' i], input[placeholder*='User' i]").first
+        await user_box.fill(GAME_USER, timeout=15000)
         await page.wait_for_timeout(1000)
 
-        # 3. Password wale dabbe me Password likhna
+        # Password box
         pass_box = page.locator("input[type='password']").first
-        await pass_box.fill(GAME_PASS)
+        await pass_box.fill(GAME_PASS, timeout=10000)
         await page.wait_for_timeout(1000)
 
-        # 4. Submit / Login button dabana
-        submit_btn = page.locator("button[type='submit'], button:has-text('Log in'), button:has-text('Login'), button:has-text('Sign in')").last
+        # Submit button
+        submit_btn = page.locator("button[type='submit'], button:has-text('Log in'), button:has-text('Login'), .login-btn").last
         await submit_btn.click()
 
-        # Login hone ke baad 8 second rukna taaki page load ho jaye
         await page.wait_for_timeout(8000)
-
-        # 5. Saboot ke liye Screenshot leke Telegram par bhejna!
         await page.screenshot(path="login_status.png")
-        send_photo("login_status.png", "📸 Yeh dekho! Robot ne login try kiya, abhi screen aisi dikh rahi hai.")
+        send_photo("login_status.png", "✅ Step 2: Login ke baad ki screen!")
 
     except Exception as e:
         await page.screenshot(path="error_screen.png")
-        send_photo("error_screen.png", f"⚠️ Login me dikkat aayi: {str(e)[:100]}")
+        send_photo("error_screen.png", f"⚠️ Abhi screen par yeh hai: {str(e)[:100]}")
 
 async def run_smart_agent():
     dataset = load_memory()
@@ -107,15 +106,35 @@ async def run_smart_agent():
     recent_mults = [d['target_mult'] for d in dataset[-10:]] if len(dataset) >= 10 else []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(viewport={"width": 1280, "height": 720})
+        # Anti-Bot Flags ke saath browser chalu karna
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
+        )
+        
+        # Robot ko Asli Indian Android Phone banana
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
+            viewport={"width": 412, "height": 915},
+            is_mobile=True,
+            has_touch=True,
+            locale="en-IN",
+            timezone_id="Asia/Kolkata"
+        )
+        
+        # Website se chhupana ki hum Robot (webdriver) hain
+        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
         page = await context.new_page()
         
-        send_telegram("🌐 *Website khol raha hoon...*")
-        await page.goto(GAME_URL, timeout=60000)
-        await page.wait_for_timeout(5000)
+        send_telegram("🌐 *Indian Mobile Browser ban kar Website khol raha hoon...*")
+        await page.goto(GAME_URL, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(8000)
 
-        # Agar ID aur Password diya hai toh login karega
         if GAME_USER and GAME_PASS:
             await auto_login(page)
 
@@ -124,11 +143,9 @@ async def run_smart_agent():
 
         while (time.time() - start_time) < MAX_RUNTIME:
             try:
-                # Game ke andar ya iframe ke andar multiplier dhundhna
                 mult_locator = page.locator('.payouts-block .payout:first-child').first
                 players_locator = page.locator('.all-bets-block .bets-count').first
 
-                # Agar game Iframe (chote dabbe) ke andar chal raha ho toh wahan bhi check karega
                 if not await mult_locator.is_visible(timeout=1000):
                     for frame in page.frames:
                         if await frame.locator('.payouts-block .payout:first-child').count() > 0:
@@ -183,6 +200,5 @@ async def run_smart_agent():
             await asyncio.sleep(2)
 
         await browser.close()
-        send_telegram("🔄 *Shift Complete:* Agle 5.5 ghante ke cycle me restart ho raha hai...")
 
 asyncio.run(run_smart_agent())
